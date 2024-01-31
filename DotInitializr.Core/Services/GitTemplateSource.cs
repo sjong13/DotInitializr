@@ -14,116 +14,155 @@ See the License for the specific language governing permissions and
 limitations under the License.
  */
 
+using LibGit2Sharp;
 using System;
 using System.Collections.Generic;
 using System.IO;
 using System.Linq;
-using LibGit2Sharp;
 
 namespace DotInitializr
 {
-   public class GitTemplateSource : ITemplateSource
-   {
-      private static readonly List<string> _ignoreFiles = new List<string>
-      {
-         Path.DirectorySeparatorChar + ".git",
-         Path.AltDirectorySeparatorChar + ".git"
-      };
+	public class GitTemplateSource : ITemplateSource
+	{
+		private static readonly List<string> _ignoreFiles = new List<string>
+	  {
+		 Path.DirectorySeparatorChar + ".git",
+		 Path.AltDirectorySeparatorChar + ".git"
+	  };
 
-      public string SourceType => "git";
+		private readonly PersonalAccessTokenAuthenticationOptions _authenticationOptions;
 
-      public TemplateFile GetFile(string fileName, string sourceUrl, string sourceDirectory = null, string sourceBranch = null)
-      {
-         TemplateFile result = null;
-         string tempPath = Path.Combine(Path.GetTempPath(), nameof(DotInitializr), Guid.NewGuid().ToString());
+		public string SourceType => "git";
 
-         if (sourceDirectory != null)
-            sourceDirectory = sourceDirectory.Replace('\\', Path.DirectorySeparatorChar);
+		public GitTemplateSource(PersonalAccessTokenAuthenticationOptions authenticationOptions)
+		{
+			_authenticationOptions = authenticationOptions;
+		}
 
-         try
-         {
-            var cloneOptions = new CloneOptions { CredentialsProvider = (url, user, cred) => new DefaultCredentials(), BranchName = sourceBranch };
-            if (!string.IsNullOrEmpty(Repository.Clone(sourceUrl, tempPath, cloneOptions)))
-            {
-               var filePath = string.IsNullOrEmpty(sourceDirectory) ? fileName : Path.Combine(sourceDirectory, fileName);
+		public GitTemplateSource()
+		{
+			_authenticationOptions = new PersonalAccessTokenAuthenticationOptions();
+		}
 
-               using var repo = new Repository(tempPath);
-               repo.CheckoutPaths(repo.Head.FriendlyName, new string[] { filePath }, new CheckoutOptions());
+		public TemplateFile GetFile(string fileName, string sourceUrl, string sourceDirectory = null, string sourceBranch = null)
+		{
+			TemplateFile result = null;
+			string tempPath = Path.Combine(Path.GetTempPath(), nameof(DotInitializr), Guid.NewGuid().ToString());
 
-               result = new TemplateFile
-               {
-                  Name = filePath,
-                  Content = File.ReadAllText(Path.Combine(tempPath, filePath))
-               };
-            }
-         }
-         catch (Exception ex)
-         {
-            var error = $"Failed to get file `{fileName}` from `{sourceUrl}`";
-            Console.WriteLine(error + Environment.NewLine + ex.ToString());
-            throw new TemplateException(error, ex);
-         }
+			if (sourceDirectory != null)
+				sourceDirectory = sourceDirectory.Replace('\\', Path.DirectorySeparatorChar);
 
-         Utils.DeleteDirectory(tempPath);
-         return result;
-      }
+			try
+			{
+				var cloneOptions = GenerateCloneOptions(sourceBranch);
+				if (!string.IsNullOrEmpty(Repository.Clone(sourceUrl, tempPath, cloneOptions)))
+				{
+					var filePath = string.IsNullOrEmpty(sourceDirectory) ? fileName : Path.Combine(sourceDirectory, fileName);
 
-      public IEnumerable<TemplateFile> GetFiles(string sourceUrl, string sourceDirectory = null, string sourceBranch = null)
-      {
-         List<TemplateFile> result = new List<TemplateFile>();
-         string tempPath = Path.Combine(Path.GetTempPath(), nameof(DotInitializr), Guid.NewGuid().ToString());
+					using var repo = new Repository(tempPath);
+					repo.CheckoutPaths(repo.Head.FriendlyName, new string[] { filePath }, new CheckoutOptions());
 
-         if (sourceDirectory != null)
-            sourceDirectory = sourceDirectory.Replace('\\', Path.DirectorySeparatorChar);
+					result = new TemplateFile
+					{
+						Name = filePath,
+						Content = File.ReadAllText(Path.Combine(tempPath, filePath))
+					};
+				}
+			}
+			catch (Exception ex)
+			{
+				var error = $"Failed to get file `{fileName}` from `{sourceUrl}`";
+				Console.WriteLine(error + Environment.NewLine + ex.ToString());
+				throw new TemplateException(error, ex);
+			}
 
-         try
-         {
-            string fullTempPath = Path.Combine(Path.GetFullPath(tempPath), sourceDirectory);
-            var cloneOptions = new CloneOptions { CredentialsProvider = (url, user, cred) => new DefaultCredentials(), BranchName = sourceBranch };
+			Utils.DeleteDirectory(tempPath);
+			return result;
+		}
 
-            if (!string.IsNullOrEmpty(Repository.Clone(sourceUrl, tempPath, cloneOptions)))
-            {
-               string filePath = string.IsNullOrEmpty(sourceDirectory) ? tempPath : Path.Combine(tempPath, sourceDirectory);
-               foreach (var fileName in Directory.EnumerateFiles(filePath, "*", SearchOption.AllDirectories))
-               {
-                  if (_ignoreFiles.Any(x => fileName.EndsWith(x)))
-                     continue;
+		public IEnumerable<TemplateFile> GetFiles(string sourceUrl, string sourceDirectory = null, string sourceBranch = null)
+		{
+			List<TemplateFile> result = new List<TemplateFile>();
+			string tempPath = Path.Combine(Path.GetTempPath(), nameof(DotInitializr), Guid.NewGuid().ToString());
 
-                  var templateFile = new TemplateFile
-                  {
-                     Name = fileName
-                        .Replace(fullTempPath, string.Empty)
-                        .TrimStart(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar),
-                     Content = File.ReadAllText(fileName)
-                  };
+			if (sourceDirectory != null)
+				sourceDirectory = sourceDirectory.Replace('\\', Path.DirectorySeparatorChar);
 
-                  if (IsBinary(templateFile.Content))
-                     templateFile = new TemplateFileBinary
-                     {
-                        Name = templateFile.Name,
-                        Content = templateFile.Content,
-                        ContentBytes = File.ReadAllBytes(fileName)
-                     };
+			try
+			{
+				string fullTempPath = Path.Combine(Path.GetFullPath(tempPath), sourceDirectory);
+				var cloneOptions = GenerateCloneOptions(sourceBranch);
 
-                  result.Add(templateFile);
-               }
-            }
-         }
-         catch (Exception ex)
-         {
-            var error = $"Failed to get files from `{sourceUrl}`";
-            Console.WriteLine(error + Environment.NewLine + ex.ToString());
-            throw new TemplateException(error, ex);
-         }
+				if (!string.IsNullOrEmpty(Repository.Clone(sourceUrl, tempPath, cloneOptions)))
+				{
+					string filePath = string.IsNullOrEmpty(sourceDirectory) ? tempPath : Path.Combine(tempPath, sourceDirectory);
+					foreach (var fileName in Directory.EnumerateFiles(filePath, "*", SearchOption.AllDirectories))
+					{
+						if (_ignoreFiles.Any(x => fileName.EndsWith(x)))
+							continue;
 
-         Utils.DeleteDirectory(tempPath);
-         return result;
-      }
+						var templateFile = new TemplateFile
+						{
+							Name = fileName
+							  .Replace(fullTempPath, string.Empty)
+							  .TrimStart(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar),
+							Content = File.ReadAllText(fileName)
+						};
 
-      private static bool IsBinary(string content)
-      {
-         Func<char, bool> IsNonTextControlChar = (char c) => char.IsControl(c) && c != '\0' && c != '\r' && c != '\n' && c != '\t' && c != '\b' && c != '\v' && c != '\f' && c != 26;
-         return content.Any(c => IsNonTextControlChar(c));
-      }
-   }
+						if (IsBinary(templateFile.Content))
+							templateFile = new TemplateFileBinary
+							{
+								Name = templateFile.Name,
+								Content = templateFile.Content,
+								ContentBytes = File.ReadAllBytes(fileName)
+							};
+
+						result.Add(templateFile);
+					}
+				}
+			}
+			catch (Exception ex)
+			{
+				var error = $"Failed to get files from `{sourceUrl}`";
+				Console.WriteLine(error + Environment.NewLine + ex.ToString());
+				throw new TemplateException(error, ex);
+			}
+
+			Utils.DeleteDirectory(tempPath);
+			return result;
+		}
+
+		private static bool IsBinary(string content)
+		{
+			Func<char, bool> IsNonTextControlChar = (char c) => char.IsControl(c) && c != '\0' && c != '\r' && c != '\n' && c != '\t' && c != '\b' && c != '\v' && c != '\f' && c != 26;
+			return content.Any(c => IsNonTextControlChar(c));
+		}
+
+		/// <summary>
+		/// generates CloneOptions that uses PAT authentication if configured; otherwise uses default (anonymous) authentication
+		/// </summary>
+		/// <param name="sourceBranch"></param>
+		/// <returns></returns>
+		private CloneOptions GenerateCloneOptions(string sourceBranch)
+		{
+			CloneOptions cloneOptions;
+
+			if (!string.IsNullOrEmpty(_authenticationOptions.PersonalAccessToken))
+			{
+				var credentials = new UsernamePasswordCredentials()
+				{
+					Username = _authenticationOptions.Username,
+					Password = _authenticationOptions.PersonalAccessToken
+				};
+
+				cloneOptions = new CloneOptions { CredentialsProvider = (url, user, cred) => credentials, BranchName = sourceBranch };
+			}
+			else
+			{
+				cloneOptions = new CloneOptions { CredentialsProvider = (url, user, cred) => new DefaultCredentials(), BranchName = sourceBranch };
+			}
+
+			return cloneOptions;
+		}
+	}
 }
